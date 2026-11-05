@@ -1,0 +1,7 @@
+# Workaround for MinGW "export ordinal too large" when Windows SDK/MSVC is unavailable.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+rustflags = [
+  "-C", "link-arg=-Wl,--exclude-all-symbols",
+  "-C", "link-arg=-Wl,--export-all-symbols",
+]
