@@ -36,7 +36,8 @@ export function QuickAddInput({ onAdd }: Props) {
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();
-          void submit();
+          // Lỗi hiển thị bởi caller (toast); tránh unhandled rejection
+          void submit().catch(() => {});
         }
       }}
     />

@@ -272,3 +272,197 @@ pub fn import_json(state: State<'_, DbState>, json: String) -> AppResult<()> {
 pub fn get_db_path(app: tauri::AppHandle) -> AppResult<String> {
     Ok(crate::db::db_path(&app)?.to_string_lossy().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Category, Item};
+
+    const TS: &str = "2026-01-01T00:00:00.000Z";
+
+    fn item(id: &str, name: &str) -> Item {
+        Item {
+            id: id.into(),
+            category_id: "cat-1".into(),
+            column_id: "col-1".into(),
+            name: name.into(),
+            description: String::new(),
+            sort_order: 0,
+            deleted_at: None,
+            created_at: TS.into(),
+            updated_at: TS.into(),
+        }
+    }
+
+    fn column(id: &str, code: &str) -> Column {
+        Column {
+            id: id.into(),
+            name: format!("Cột {id}"),
+            code: code.into(),
+            sort_order: 0,
+            deleted_at: None,
+            created_at: TS.into(),
+            updated_at: TS.into(),
+            items: Vec::new(),
+        }
+    }
+
+    fn category(id: &str, name: &str) -> Category {
+        Category {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            sort_order: 0,
+            collapsed: false,
+            deleted_at: None,
+            created_at: TS.into(),
+            updated_at: TS.into(),
+            columns: Vec::new(),
+        }
+    }
+
+    fn payload(version: i32, columns: Vec<Column>, categories: Vec<Category>) -> ExportPayload {
+        ExportPayload {
+            version,
+            exported_at: TS.into(),
+            columns,
+            categories,
+        }
+    }
+
+    #[test]
+    fn valid_v2_payload_passes() {
+        let mut col = column("col-1", "running");
+        col.items.push(item("item-1", "Việc A"));
+        let mut cat = category("cat-1", "Đầu mục A");
+        cat.columns.push(col.clone());
+        let p = payload(2, vec![col], vec![cat]);
+        validate_payload(&p).unwrap();
+    }
+
+    #[test]
+    fn unsupported_version_is_rejected() {
+        let p = payload(3, vec![column("col-1", "running")], vec![]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("không được hỗ trợ"));
+    }
+
+    #[test]
+    fn v1_and_v2_are_supported() {
+        let p = payload(1, vec![], vec![category("cat-1", "Đầu mục")]);
+        validate_payload(&p).unwrap();
+        let p = payload(2, vec![], vec![category("cat-1", "Đầu mục")]);
+        validate_payload(&p).unwrap();
+    }
+
+    #[test]
+    fn v2_duplicate_code_is_rejected() {
+        let p = payload(
+            2,
+            vec![column("col-1", "running"), column("col-2", "running")],
+            vec![],
+        );
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Trùng column code"));
+    }
+
+    #[test]
+    fn v1_duplicate_codes_are_allowed() {
+        // v1: mỗi đầu mục có bộ cột riêng → code lặp là hợp lệ
+        let mut cat1 = category("cat-1", "Đầu mục A");
+        cat1.columns.push(column("col-1", "running"));
+        let mut cat2 = category("cat-2", "Đầu mục B");
+        cat2.columns.push(column("col-2", "running"));
+        let p = payload(1, vec![], vec![cat1, cat2]);
+        validate_payload(&p).unwrap();
+    }
+
+    #[test]
+    fn v2_duplicate_column_id_is_rejected() {
+        let p = payload(
+            2,
+            vec![column("col-1", "running"), column("col-1", "pending")],
+            vec![],
+        );
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Trùng column id"));
+    }
+
+    #[test]
+    fn column_without_name_or_code_is_rejected() {
+        let p = payload(2, vec![column("col-1", "")], vec![]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Column thiếu name/code"));
+
+        let mut bad = column("col-1", "running");
+        bad.name = "  ".into();
+        let p = payload(2, vec![bad], vec![]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Column thiếu name/code"));
+    }
+
+    #[test]
+    fn invalid_code_charset_is_rejected() {
+        let p = payload(2, vec![column("col-1", "code không hợp lệ!")], vec![]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Code không hợp lệ"));
+    }
+
+    #[test]
+    fn category_without_name_is_rejected() {
+        let p = payload(2, vec![], vec![category("cat-1", "   ")]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Category thiếu name"));
+    }
+
+    #[test]
+    fn duplicate_category_id_is_rejected() {
+        let p = payload(
+            2,
+            vec![],
+            vec![category("cat-1", "A"), category("cat-1", "B")],
+        );
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Trùng category id"));
+    }
+
+    #[test]
+    fn item_without_name_is_rejected() {
+        let mut cat = category("cat-1", "Đầu mục A");
+        let mut col = column("col-1", "running");
+        col.items.push(item("item-1", "  "));
+        cat.columns.push(col);
+        let p = payload(2, vec![], vec![cat]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Item thiếu name"));
+    }
+
+    #[test]
+    fn duplicate_item_id_is_rejected() {
+        let mut cat = category("cat-1", "Đầu mục A");
+        let mut col1 = column("col-1", "running");
+        col1.items.push(item("item-1", "A"));
+        let mut col2 = column("col-2", "pending");
+        col2.items.push(item("item-1", "B"));
+        cat.columns.push(col1);
+        cat.columns.push(col2);
+        let p = payload(2, vec![], vec![cat]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Trùng item id"));
+    }
+
+    #[test]
+    fn duplicate_item_id_across_categories_is_rejected() {
+        let mut cat1 = category("cat-1", "Đầu mục A");
+        let mut col1 = column("col-1", "running");
+        col1.items.push(item("item-1", "A"));
+        cat1.columns.push(col1);
+        let mut cat2 = category("cat-2", "Đầu mục B");
+        let mut col2 = column("col-1", "running");
+        col2.items.push(item("item-1", "B"));
+        cat2.columns.push(col2);
+        let p = payload(1, vec![], vec![cat1, cat2]);
+        let err = validate_payload(&p).unwrap_err();
+        assert!(err.to_string().contains("Trùng item id"));
+    }
+}

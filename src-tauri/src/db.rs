@@ -285,3 +285,210 @@ pub fn next_sort_order(
     let value: i64 = stmt.query_row(params, |r| r.get(0))?;
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_column_code_accepts_valid_charset_and_trims() {
+        assert_eq!(validate_column_code("  running  ").unwrap(), "running");
+        assert_eq!(validate_column_code("test_col-01").unwrap(), "test_col-01");
+        assert_eq!(validate_column_code("ABC-xyz_123").unwrap(), "ABC-xyz_123");
+    }
+
+    #[test]
+    fn validate_column_code_rejects_empty_and_invalid_charset() {
+        assert!(validate_column_code("").is_err());
+        assert!(validate_column_code("   ").is_err());
+        // khoảng trắng ở giữa
+        assert!(validate_column_code("co de").is_err());
+        // tiếng Việt / ký tự đặc biệt
+        assert!(validate_column_code("cột").is_err());
+        assert!(validate_column_code("code!").is_err());
+        assert!(validate_column_code("code@x").is_err());
+    }
+
+    #[test]
+    fn validate_column_code_error_mentions_charset() {
+        let err = validate_column_code("code!").unwrap_err();
+        assert!(err.to_string().contains("a-z"));
+    }
+
+    #[test]
+    fn code_exists_checks_all_rows_and_excludes_given_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../migrations/001_init.sql"))
+            .unwrap();
+        let now = "2026-01-01T00:00:00.000Z";
+        conn.execute(
+            "INSERT INTO columns (id, name, code, sort_order, deleted_at, created_at, updated_at)
+             VALUES ('col-1', 'Đang chạy', 'running', 0, NULL, ?1, ?1)",
+            params![now],
+        )
+        .unwrap();
+
+        assert!(code_exists(&conn, "running", None).unwrap());
+
+        // code trùng vẫn bị chặn kể cả khi bản ghi đã vào thùng rác (deleted_at)
+        conn.execute(
+            "UPDATE columns SET deleted_at = ?1 WHERE id = 'col-1'",
+            params![now],
+        )
+        .unwrap();
+        assert!(code_exists(&conn, "running", None).unwrap());
+
+        // loại trừ chính record (trường hợp update giữ nguyên code)
+        assert!(!code_exists(&conn, "running", Some("col-1")).unwrap());
+        assert!(!code_exists(&conn, "pending", None).unwrap());
+    }
+
+    #[test]
+    fn next_sort_order_returns_zero_for_empty_and_max_plus_one_otherwise() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../migrations/001_init.sql"))
+            .unwrap();
+        let now = "2026-01-01T00:00:00.000Z";
+
+        assert_eq!(
+            next_sort_order(&conn, "columns", "1=1", &[]).unwrap(),
+            0
+        );
+
+        for i in 0..3 {
+            conn.execute(
+                "INSERT INTO columns (id, name, code, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                params![format!("col-{i}"), format!("Cột {i}"), format!("c{i}"), i, now],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            next_sort_order(&conn, "columns", "1=1", &[]).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn migrate_creates_schema_and_seeds_default_columns_once() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM columns", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let running: String = conn
+            .query_row(
+                "SELECT name FROM columns WHERE code = 'running'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(running, "Đang chạy");
+        let pending: String = conn
+            .query_row(
+                "SELECT name FROM columns WHERE code = 'pending'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, "Chờ chạy");
+
+        // Migrate lại (DB đã có schema + dữ liệu) → không seed thêm
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM columns", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn migrate_merges_legacy_per_category_columns_into_global_by_code() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                collapsed INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE columns (
+                id TEXT PRIMARY KEY NOT NULL,
+                category_id TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                code TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE items (
+                id TEXT PRIMARY KEY NOT NULL,
+                category_id TEXT NOT NULL,
+                column_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO categories (id, name, sort_order, collapsed, created_at, updated_at)
+                VALUES ('cat-1', 'Việc', 0, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+            INSERT INTO columns (id, category_id, name, code, sort_order, created_at, updated_at) VALUES
+                ('col-running-1', 'cat-1', 'Đang chạy', 'running_1', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+                ('col-running-2', 'cat-1', 'Đang chạy', 'running_2', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+                ('col-pending',   'cat-1', 'Chờ chạy', 'pending',   2, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+            INSERT INTO items (id, category_id, column_id, name, sort_order, created_at, updated_at) VALUES
+                ('item-1', 'cat-1', 'col-running-1', 'Việc A', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+                ('item-2', 'cat-1', 'col-running-2', 'Việc B', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+            ",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        // running_1 + running_2 gộp thành 1 cột 'running' → còn 2 cột global
+        let col_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM columns", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(col_count, 2);
+
+        // Items vẫn còn, đã map sang cột mới
+        let running_items: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM items i JOIN columns c ON c.id = i.column_id WHERE c.code = 'running'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(running_items, 2);
+
+        let names: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM items ORDER BY sort_order ASC")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(names, vec!["Việc A".to_string(), "Việc B".to_string()]);
+
+        // Bảng legacy đã bị dọn
+        let legacy: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('columns_legacy', 'items_legacy')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy, 0);
+    }
+}

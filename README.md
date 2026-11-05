@@ -32,6 +32,22 @@ File SQLite: `%APPDATA%\com.notetask.forhuman\data.db`
 
 Sao lưu khuyến nghị: dùng mục **Dữ liệu → Export JSON** (mặc định gồm cả thùng rác).
 
+## Test
+
+```bash
+npm test        # chạy 1 lần (Vitest + Testing Library)
+npm run test:watch
+```
+
+Test backend (Rust, cần cài Rust toolchain):
+
+```bash
+cd src-tauri
+cargo test
+```
+
+Danh sách test case đầy đủ (tự động + thủ công): [`docs/TEST-CASES.md`](docs/TEST-CASES.md).
+
 ## Tính năng chính
 
 - Đầu mục → cột động → item

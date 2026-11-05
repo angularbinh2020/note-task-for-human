@@ -323,3 +323,32 @@ pub fn trash_count(state: State<'_, DbState>) -> AppResult<u64> {
         Ok(cats + cols + items)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::DateTime;
+
+    fn iso(t: DateTime<Utc>) -> String {
+        t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    #[test]
+    fn days_remaining_full_range() {
+        let now = Utc::now();
+        // Vừa xóa → còn 30 ngày
+        assert_eq!(days_remaining(&iso(now)), 30);
+        // Đã xóa 29 ngày → còn 1 ngày
+        assert_eq!(days_remaining(&iso(now - Duration::days(29))), 1);
+        // Đúng 30 ngày → 0
+        assert_eq!(days_remaining(&iso(now - Duration::days(30))), 0);
+        // Quá 30 ngày → 0 (không âm)
+        assert_eq!(days_remaining(&iso(now - Duration::days(45))), 0);
+    }
+
+    #[test]
+    fn days_remaining_invalid_string_returns_zero() {
+        assert_eq!(days_remaining("khong-phai-ngay"), 0);
+        assert_eq!(days_remaining(""), 0);
+    }
+}
