@@ -41,7 +41,7 @@ function Shell() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-[1400px] items-center justify-between gap-4 px-4 py-3">
+        <div className="flex w-full items-center justify-between gap-4 px-4 py-3">
           <div>
             <div className="text-sm font-semibold tracking-wide text-[var(--color-primary)]">
               Offline Task Board
@@ -79,7 +79,7 @@ function Shell() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1400px] px-4 py-5">
+      <main className="w-full px-4 py-5">
         {page === "home" ? (
           <HomePage
             key={homeKey}

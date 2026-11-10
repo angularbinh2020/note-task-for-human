@@ -43,7 +43,7 @@ export function ItemCard({ item, onEdit, onDelete, onCopy }: Props) {
           <GripVertical className="h-4 w-4" />
         </button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{item.name}</div>
+          <div className="line-clamp-2 text-sm font-medium">{item.name}</div>
           {item.description ? (
             <div className="mt-0.5 line-clamp-2 text-xs text-[var(--color-muted-foreground)]">
               {item.description}
